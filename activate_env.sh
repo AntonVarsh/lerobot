@@ -16,7 +16,7 @@ unset __conda_setup
 
 conda activate lerobot
 
-HF_USER=$(NO_COLOR=1 hf auth whoami | awk -F': *' 'NR==1 {print $2}')
+HF_USER=$(NO_COLOR=1 hf auth whoami | awk '/user:/ {print $2}')
 echo $HF_USER
 
 sudo chmod 666 /dev/ttyACM0
