@@ -49,5 +49,16 @@ class SOFollowerRobotConfig(RobotConfig, SOFollowerConfig):
     pass
 
 
+# A distinct class (not just an alias) is required: draccus resolves a config instance's
+# `.type` by looking up the *first* registry entry whose class matches, so a class registered
+# under multiple names (like SOFollowerRobotConfig above) always reports the first one. SO107
+# must route to a different robot class than SO100/SO101, so it needs its own registered type.
+@RobotConfig.register_subclass("so107_follower")
+@dataclass
+class SO107FollowerRobotConfig(RobotConfig, SOFollowerConfig):
+    pass
+
+
 SO100FollowerConfig = SOFollowerRobotConfig
 SO101FollowerConfig = SOFollowerRobotConfig
+SO107FollowerConfig = SO107FollowerRobotConfig

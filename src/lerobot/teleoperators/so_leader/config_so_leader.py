@@ -37,5 +37,16 @@ class SOLeaderTeleopConfig(TeleoperatorConfig, SOLeaderConfig):
     pass
 
 
+# A distinct class (not just an alias) is required: draccus resolves a config instance's
+# `.type` by looking up the *first* registry entry whose class matches, so a class registered
+# under multiple names (like SOLeaderTeleopConfig above) always reports the first one. SO107
+# must route to a different teleoperator class than SO100/SO101, so it needs its own type.
+@TeleoperatorConfig.register_subclass("so107_leader")
+@dataclass
+class SO107LeaderTeleopConfig(TeleoperatorConfig, SOLeaderConfig):
+    pass
+
+
 SO100LeaderConfig = SOLeaderTeleopConfig
 SO101LeaderConfig = SOLeaderTeleopConfig
+SO107LeaderConfig = SO107LeaderTeleopConfig

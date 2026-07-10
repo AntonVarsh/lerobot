@@ -29,7 +29,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
-from .config_so_follower import SOFollowerRobotConfig
+from .config_so_follower import SO107FollowerRobotConfig, SOFollowerRobotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,20 @@ class SOFollower(Robot):
     config_class = SOFollowerRobotConfig
     name = "so_follower"
 
+    # Joints that can spin continuously (no mechanical hard stop), so calibration assumes
+    # a full 0-4095 encoder turn instead of recording a measured range of motion.
+    full_turn_motors: tuple[str, ...] = ("wrist_roll",)
+
+    def _motors(self, norm_mode_body: MotorNormMode) -> dict[str, Motor]:
+        return {
+            "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+            "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
+            "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+            "wrist_flex": Motor(4, "sts3215", norm_mode_body),
+            "wrist_roll": Motor(5, "sts3215", norm_mode_body),
+            "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
+        }
+
     def __init__(self, config: SOFollowerRobotConfig):
         super().__init__(config)
         self.config = config
@@ -50,14 +64,7 @@ class SOFollower(Robot):
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
         self.bus = FeetechMotorsBus(
             port=self.config.port,
-            motors={
-                "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
-                "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
-                "elbow_flex": Motor(3, "sts3215", norm_mode_body),
-                "wrist_flex": Motor(4, "sts3215", norm_mode_body),
-                "wrist_roll": Motor(5, "sts3215", norm_mode_body),
-                "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_0_100),
-            },
+            motors=self._motors(norm_mode_body),
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
@@ -128,15 +135,16 @@ class SOFollower(Robot):
         homing_offsets = self.bus.set_half_turn_homings()
 
         # Attempt to call record_ranges_of_motion with a reduced motor set when appropriate.
-        full_turn_motor = "wrist_roll"
-        unknown_range_motors = [motor for motor in self.bus.motors if motor != full_turn_motor]
+        full_turn_motors = [motor for motor in self.full_turn_motors if motor in self.bus.motors]
+        unknown_range_motors = [motor for motor in self.bus.motors if motor not in full_turn_motors]
         print(
-            f"Move all joints except '{full_turn_motor}' sequentially through their "
+            f"Move all joints except {full_turn_motors} sequentially through their "
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
         range_mins, range_maxes = self.bus.record_ranges_of_motion(unknown_range_motors)
-        range_mins[full_turn_motor] = 0
-        range_maxes[full_turn_motor] = 4095
+        for motor in full_turn_motors:
+            range_mins[motor] = 0
+            range_maxes[motor] = 4095
 
         self.calibration = {}
         for motor, m in self.bus.motors.items():
@@ -227,6 +235,28 @@ class SOFollower(Robot):
             cam.disconnect()
 
         logger.info(f"{self} disconnected.")
+
+
+class SO107Follower(SOFollower):
+    """
+    SO-107 follower: SO-101 plus a `forearm_roll` joint inserted between `elbow_flex` and
+    `wrist_flex`. Like `wrist_roll`, `forearm_roll` spins continuously with no hard stop.
+    """
+
+    config_class = SO107FollowerRobotConfig
+    name = "so107_follower"
+    full_turn_motors = ("wrist_roll", "forearm_roll")
+
+    def _motors(self, norm_mode_body: MotorNormMode) -> dict[str, Motor]:
+        return {
+            "shoulder_pan": Motor(1, "sts3215", norm_mode_body),
+            "shoulder_lift": Motor(2, "sts3215", norm_mode_body),
+            "elbow_flex": Motor(3, "sts3215", norm_mode_body),
+            "forearm_roll": Motor(4, "sts3215", norm_mode_body),
+            "wrist_flex": Motor(5, "sts3215", norm_mode_body),
+            "wrist_roll": Motor(6, "sts3215", norm_mode_body),
+            "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_0_100),
+        }
 
 
 SO100Follower = SOFollower
