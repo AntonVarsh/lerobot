@@ -145,9 +145,22 @@ class SOLeader(Teleoperator):
         self.bus.disable_torque()
 
     def setup_motors(self) -> None:
-        for motor in reversed(self.bus.motors):
+        motor_names = list(self.bus.motors)
+        done = set()
+        while True:
+            print("\nMotors:")
+            for i, motor in enumerate(motor_names, start=1):
+                print(f"  {i}. {motor}" + (" (done)" if motor in done else ""))
+            choice = input("Enter a motor number to flash, or press ENTER to finish: ").strip()
+            if not choice:
+                break
+            if not choice.isdigit() or not (1 <= int(choice) <= len(motor_names)):
+                print(f"Invalid choice: {choice!r}")
+                continue
+            motor = motor_names[int(choice) - 1]
             input(f"Connect the controller board to the '{motor}' motor only and press enter.")
             self.bus.setup_motor(motor)
+            done.add(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
     @check_if_not_connected
@@ -175,6 +188,11 @@ class SO107Leader(SOLeader):
     """
     SO-107 leader: SO-101 plus a `forearm_roll` joint inserted between `elbow_flex` and
     `wrist_flex`. Like `wrist_roll`, `forearm_roll` spins continuously with no hard stop.
+
+    Motor ids are sequential in physical chain order (1-7), matching the SO-101 convention.
+    Since `forearm_roll` is inserted at id 4, `wrist_flex`/`wrist_roll`/`gripper` shift up by
+    one from their SO-101 ids -- re-run `lerobot-setup-motors` for those three (and the new
+    motor) after adding the joint; `shoulder_pan`/`shoulder_lift`/`elbow_flex` are unaffected.
     """
 
     config_class = SO107LeaderTeleopConfig
