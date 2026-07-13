@@ -21,8 +21,8 @@ from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
-from ..so_follower import SOFollower, SOFollowerRobotConfig
-from .config_bi_so_follower import BiSOFollowerConfig
+from ..so_follower import SO107Follower, SO107FollowerRobotConfig, SOFollower, SOFollowerRobotConfig
+from .config_bi_so_follower import BiSO107FollowerConfig, BiSOFollowerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +35,15 @@ class BiSOFollower(Robot):
     config_class = BiSOFollowerConfig
     name = "bi_so_follower"
 
+    # Overridden by subclasses (e.g. `BiSO107Follower`) to swap in a different per-arm hardware class.
+    arm_cls: type[SOFollower] = SOFollower
+    arm_config_cls: type[SOFollowerRobotConfig] = SOFollowerRobotConfig
+
     def __init__(self, config: BiSOFollowerConfig):
         super().__init__(config)
         self.config = config
 
-        left_arm_config = SOFollowerRobotConfig(
+        left_arm_config = self.arm_config_cls(
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.left_arm_config.port,
@@ -49,7 +53,7 @@ class BiSOFollower(Robot):
             cameras=config.left_arm_config.cameras,
         )
 
-        right_arm_config = SOFollowerRobotConfig(
+        right_arm_config = self.arm_config_cls(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.right_arm_config.port,
@@ -59,8 +63,8 @@ class BiSOFollower(Robot):
             cameras=config.right_arm_config.cameras,
         )
 
-        self.left_arm = SOFollower(left_arm_config)
-        self.right_arm = SOFollower(right_arm_config)
+        self.left_arm = self.arm_cls(left_arm_config)
+        self.right_arm = self.arm_cls(right_arm_config)
 
         # Only for compatibility with other parts of the codebase that expect a `robot.cameras` attribute
         self.cameras = {**self.left_arm.cameras, **self.right_arm.cameras}
@@ -156,3 +160,13 @@ class BiSOFollower(Robot):
     def disconnect(self):
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+
+class BiSO107Follower(BiSOFollower):
+    """Bimanual SO-107 follower: two `SO107Follower` arms (SO-101 plus `forearm_roll`)."""
+
+    config_class = BiSO107FollowerConfig
+    name = "bi_so107_follower"
+
+    arm_cls = SO107Follower
+    arm_config_cls = SO107FollowerRobotConfig

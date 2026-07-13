@@ -27,3 +27,16 @@ class BiSOLeaderConfig(TeleoperatorConfig):
 
     left_arm_config: SOLeaderConfig
     right_arm_config: SOLeaderConfig
+
+
+# Distinct class (not an alias) so draccus' `.type` resolution picks the right one -- see the
+# same note in `so_leader/config_so_leader.py`. `left_arm_config`/`right_arm_config` stay typed
+# as the shared `SOLeaderConfig` since the per-arm motor layout is decided by `BiSO107Leader`
+# (which arm class it instantiates), not by this config.
+@TeleoperatorConfig.register_subclass("bi_so107_leader")
+@dataclass
+class BiSO107LeaderConfig(TeleoperatorConfig):
+    """Configuration class for Bi SO-107 Leader teleoperators."""
+
+    left_arm_config: SOLeaderConfig
+    right_arm_config: SOLeaderConfig

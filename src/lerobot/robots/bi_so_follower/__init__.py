@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .bi_so_follower import BiSOFollower
-from .config_bi_so_follower import BiSOFollowerConfig
+from .bi_so_follower import BiSO107Follower, BiSOFollower
+from .config_bi_so_follower import BiSO107FollowerConfig, BiSOFollowerConfig
 
-__all__ = ["BiSOFollower", "BiSOFollowerConfig"]
+__all__ = ["BiSO107Follower", "BiSO107FollowerConfig", "BiSOFollower", "BiSOFollowerConfig"]

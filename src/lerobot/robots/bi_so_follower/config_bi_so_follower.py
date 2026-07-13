@@ -27,3 +27,16 @@ class BiSOFollowerConfig(RobotConfig):
 
     left_arm_config: SOFollowerConfig
     right_arm_config: SOFollowerConfig
+
+
+# Distinct class (not an alias) so draccus' `.type` resolution picks the right one -- see the
+# same note in `so_follower/config_so_follower.py`. `left_arm_config`/`right_arm_config` stay typed
+# as the shared `SOFollowerConfig` since the per-arm motor layout is decided by `BiSO107Follower`
+# (which arm class it instantiates), not by this config.
+@RobotConfig.register_subclass("bi_so107_follower")
+@dataclass
+class BiSO107FollowerConfig(RobotConfig):
+    """Configuration class for Bi SO-107 Follower robots."""
+
+    left_arm_config: SOFollowerConfig
+    right_arm_config: SOFollowerConfig

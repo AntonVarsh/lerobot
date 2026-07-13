@@ -19,9 +19,9 @@ from functools import cached_property
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
-from ..so_leader import SOLeader, SOLeaderTeleopConfig
+from ..so_leader import SO107Leader, SO107LeaderTeleopConfig, SOLeader, SOLeaderTeleopConfig
 from ..teleoperator import Teleoperator
-from .config_bi_so_leader import BiSOLeaderConfig
+from .config_bi_so_leader import BiSO107LeaderConfig, BiSOLeaderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,24 +34,28 @@ class BiSOLeader(Teleoperator):
     config_class = BiSOLeaderConfig
     name = "bi_so_leader"
 
+    # Overridden by subclasses (e.g. `BiSO107Leader`) to swap in a different per-arm hardware class.
+    arm_cls: type[SOLeader] = SOLeader
+    arm_config_cls: type[SOLeaderTeleopConfig] = SOLeaderTeleopConfig
+
     def __init__(self, config: BiSOLeaderConfig):
         super().__init__(config)
         self.config = config
 
-        left_arm_config = SOLeaderTeleopConfig(
+        left_arm_config = self.arm_config_cls(
             id=f"{config.id}_left" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.left_arm_config.port,
         )
 
-        right_arm_config = SOLeaderTeleopConfig(
+        right_arm_config = self.arm_config_cls(
             id=f"{config.id}_right" if config.id else None,
             calibration_dir=config.calibration_dir,
             port=config.right_arm_config.port,
         )
 
-        self.left_arm = SOLeader(left_arm_config)
-        self.right_arm = SOLeader(right_arm_config)
+        self.left_arm = self.arm_cls(left_arm_config)
+        self.right_arm = self.arm_cls(right_arm_config)
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -114,3 +118,13 @@ class BiSOLeader(Teleoperator):
     def disconnect(self) -> None:
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+
+class BiSO107Leader(BiSOLeader):
+    """Bimanual SO-107 leader: two `SO107Leader` arms (SO-101 plus `forearm_roll`)."""
+
+    config_class = BiSO107LeaderConfig
+    name = "bi_so107_leader"
+
+    arm_cls = SO107Leader
+    arm_config_cls = SO107LeaderTeleopConfig

@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .bi_so_leader import BiSOLeader, BiSOLeaderConfig
+from .bi_so_leader import BiSO107Leader, BiSOLeader
+from .config_bi_so_leader import BiSO107LeaderConfig, BiSOLeaderConfig
 
-__all__ = ["BiSOLeader", "BiSOLeaderConfig"]
+__all__ = ["BiSO107Leader", "BiSO107LeaderConfig", "BiSOLeader", "BiSOLeaderConfig"]
