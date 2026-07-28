@@ -69,6 +69,10 @@ class SOFollower(Robot):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
+        # Previous continuous forearm-roll target received from the leader.
+        # Used to convert an absolute leader angle into a small relative step.
+        self._last_forearm_roll_target: float | None = None
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
@@ -99,6 +103,10 @@ class SOFollower(Robot):
         """
 
         self.bus.connect()
+
+        # Reset forearm-roll step tracking after reconnecting.
+        self._last_forearm_roll_target = None
+
         if not self.is_calibrated and calibrate:
             logger.info(
                 "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
@@ -160,21 +168,49 @@ class SOFollower(Robot):
         self._save_calibration()
         print("Calibration saved to", self.calibration_fpath)
 
+
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
+
             for motor in self.bus.motors:
-                self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
-                # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
+                if motor == "forearm_roll":
+                    # Disable the normal one-turn position limits.
+                    self.bus.write(
+                        "Min_Position_Limit",
+                        motor,
+                        0,
+                        normalize=False,
+                    )
+                    self.bus.write(
+                        "Max_Position_Limit",
+                        motor,
+                        0,
+                        normalize=False,
+                    )
+
+                    # Interpret Goal_Position as a relative step.
+                    self.bus.write(
+                        "Operating_Mode",
+                        motor,
+                        OperatingMode.STEP.value,
+                    )
+                else:
+                    self.bus.write(
+                        "Operating_Mode",
+                        motor,
+                        OperatingMode.POSITION.value,
+                    )
+
                 self.bus.write("P_Coefficient", motor, 16)
-                # Set I_Coefficient and D_Coefficient to default value 0 and 32
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    self.bus.write("Max_Torque_Limit", motor, 500)  # 50% of max torque to avoid burnout
-                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
-                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
+                    self.bus.write("Max_Torque_Limit", motor, 500)
+                    self.bus.write("Protection_Current", motor, 250)
+                    self.bus.write("Overload_Torque", motor, 25)
+
 
     def setup_motors(self) -> None:
         motor_names = list(self.bus.motors)
@@ -213,33 +249,73 @@ class SOFollower(Robot):
 
         return obs_dict
 
+
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        """Command arm to move to a target joint configuration.
+        """Command the arm, using relative step control for forearm_roll."""
 
-        The relative action magnitude may be clipped depending on the configuration parameter
-        `max_relative_target`. In this case, the action sent differs from original action.
-        Thus, this function always returns the action actually sent.
+        goal_pos = {
+            key.removesuffix(".pos"): val
+            for key, val in action.items()
+            if key.endswith(".pos")
+        }
 
-        Raises:
-            RobotDeviceNotConnectedError: if robot is not connected.
+        # Remove forearm_roll from the normal absolute-position write.
+        forearm_roll_target = goal_pos.pop("forearm_roll", None)
 
-        Returns:
-            RobotAction: the action sent to the motors, potentially clipped.
-        """
-
-        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
-
-        # Cap goal position when too far away from present position.
-        # /!\ Slower fps expected due to reading from the follower.
-        if self.config.max_relative_target is not None:
+        # Normal position control for every other joint.
+        if self.config.max_relative_target is not None and goal_pos:
             present_pos = self.bus.sync_read("Present_Position")
-            goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
-            goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
+            goal_present_pos = {
+                key: (g_pos, present_pos[key])
+                for key, g_pos in goal_pos.items()
+            }
+            goal_pos = ensure_safe_goal_position(
+                goal_present_pos,
+                self.config.max_relative_target,
+            )
 
-        # Send goal position to the arm
-        self.bus.sync_write("Goal_Position", goal_pos)
-        return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+        if goal_pos:
+            self.bus.sync_write("Goal_Position", goal_pos)
+
+        # Incremental control for forearm_roll.
+        if forearm_roll_target is not None:
+            forearm_roll_target = float(forearm_roll_target)
+
+            # The first frame only establishes the reference.
+            # Do not command a potentially huge movement.
+            if self._last_forearm_roll_target is not None:
+                delta_degrees = (
+                    forearm_roll_target
+                    - self._last_forearm_roll_target
+                )
+
+                # Convert degrees to raw encoder steps:
+                # 4096 raw units = 360 degrees.
+                delta_raw = round(delta_degrees * 4096.0 / 360.0)
+
+                # Prevent one bad reading from causing a large sudden step.
+                max_step_raw = 100
+                delta_raw = max(-max_step_raw, min(max_step_raw, delta_raw))
+
+                if delta_raw != 0:
+                    self.bus.sync_write(
+                        "Goal_Position",
+                        {"forearm_roll": delta_raw},
+                        normalize=False,
+                    )
+
+            self._last_forearm_roll_target = forearm_roll_target
+
+        returned_action = {
+            f"{motor}.pos": val
+            for motor, val in goal_pos.items()
+        }
+
+        if forearm_roll_target is not None:
+            returned_action["forearm_roll.pos"] = forearm_roll_target
+
+        return returned_action
 
     @check_if_not_connected
     def disconnect(self):

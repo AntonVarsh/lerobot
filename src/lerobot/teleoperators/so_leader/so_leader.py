@@ -60,6 +60,12 @@ class SOLeader(Teleoperator):
             calibration=self.calibration,
         )
 
+        # Used to unwrap previous raw forearm-roll reading, in the range [-180, 180].
+        self._last_forearm_roll: float | None = None
+
+        # Our software-tracked continuous forearm-roll angle.
+        self._continuous_forearm_roll: float | None = None
+
     @property
     def action_features(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
@@ -75,6 +81,11 @@ class SOLeader(Teleoperator):
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         self.bus.connect()
+
+        # Reset continuous-angle tracking after reconnecting.
+        self._last_forearm_roll = None
+        self._continuous_forearm_roll = None
+
         if not self.is_calibrated and calibrate:
             logger.info(
                 "Mismatch between calibration values in the motor and the calibration file or no calibration file found"
@@ -163,11 +174,65 @@ class SOLeader(Teleoperator):
             done.add(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    def _unwrap_forearm_roll(self, wrapped_angle: float) -> float:
+        """
+        Turn the wrapped forearm-roll reading into a continuous angle.
+
+        Example:
+            Encoder:     175, 179, -179, -175
+            Continuous:  175, 179,  181,  185
+        """
+
+        # First reading: there is no previous reading to compare against.
+        if self._last_forearm_roll is None:
+            self._last_forearm_roll = wrapped_angle
+            self._continuous_forearm_roll = wrapped_angle
+            return wrapped_angle
+
+        # How much did the reported angle change since the previous frame?
+        delta = wrapped_angle - self._last_forearm_roll
+
+        # Crossing forward through +180:
+        #
+        # Previous = 179
+        # Current  = -179
+        # Raw delta = -358
+        #
+        # The joint really moved forward by +2 degrees.
+        if delta < -180.0:
+            delta += 360.0
+
+        # Crossing backward through -180:
+        #
+        # Previous = -179
+        # Current  = 179
+        # Raw delta = +358
+        #
+        # The joint really moved backward by -2 degrees.
+        elif delta > 180.0:
+            delta -= 360.0
+
+        self._continuous_forearm_roll += delta
+        self._last_forearm_roll = wrapped_angle
+
+        return self._continuous_forearm_roll
+
+
     @check_if_not_connected
     def get_action(self) -> dict[str, float]:
         start = time.perf_counter()
+
         action = self.bus.sync_read("Present_Position")
+
+        # Only unwrap forearm_roll on the SO-107.
+        if "forearm_roll" in action:
+            action["forearm_roll"] = self._unwrap_forearm_roll(
+                float(action["forearm_roll"])
+            )
+
+        # Convert names such as "forearm_roll" to "forearm_roll.pos".
         action = {f"{motor}.pos": val for motor, val in action.items()}
+
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
