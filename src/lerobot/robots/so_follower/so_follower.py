@@ -73,6 +73,10 @@ class SOFollower(Robot):
         # Used to convert an absolute leader angle into a small relative step.
         self._last_forearm_roll_target: float | None = None
 
+        # True after startup alignment and switching forearm_roll to STEP mode.
+        self._forearm_roll_synchronized: bool = False
+
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
@@ -106,6 +110,7 @@ class SOFollower(Robot):
 
         # Reset forearm-roll step tracking after reconnecting.
         self._last_forearm_roll_target = None
+        self._forearm_roll_synchronized = False
 
         if not self.is_calibrated and calibrate:
             logger.info(
@@ -175,7 +180,6 @@ class SOFollower(Robot):
 
             for motor in self.bus.motors:
                 if motor == "forearm_roll":
-                    # Disable the normal one-turn position limits.
                     self.bus.write(
                         "Min_Position_Limit",
                         motor,
@@ -185,15 +189,13 @@ class SOFollower(Robot):
                     self.bus.write(
                         "Max_Position_Limit",
                         motor,
-                        0,
+                        4095,
                         normalize=False,
                     )
-
-                    # Interpret Goal_Position as a relative step.
                     self.bus.write(
                         "Operating_Mode",
                         motor,
-                        OperatingMode.STEP.value,
+                        OperatingMode.POSITION.value,
                     )
                 else:
                     self.bus.write(
@@ -210,6 +212,40 @@ class SOFollower(Robot):
                     self.bus.write("Max_Torque_Limit", motor, 500)
                     self.bus.write("Protection_Current", motor, 250)
                     self.bus.write("Overload_Torque", motor, 25)
+
+    def _switch_forearm_roll_to_step(self) -> None:
+        """Switch forearm_roll from absolute POSITION mode to relative STEP mode."""
+
+        with self.bus.torque_disabled():
+            # Disable the one-turn absolute-position limits.
+            self.bus.write(
+                "Min_Position_Limit",
+                "forearm_roll",
+                0,
+                normalize=False,
+            )
+            self.bus.write(
+                "Max_Position_Limit",
+                "forearm_roll",
+                0,
+                normalize=False,
+            )
+
+            # Interpret future Goal_Position writes as relative movements.
+            self.bus.write(
+                "Operating_Mode",
+                "forearm_roll",
+                OperatingMode.STEP.value,
+            )
+
+            # Ensure no nonzero command remains in Goal_Position after changing
+            # the meaning of the register from absolute position to relative step.
+            self.bus.write(
+                "Goal_Position",
+                "forearm_roll",
+                0,
+                normalize=False,
+            )
 
 
     def setup_motors(self) -> None:
@@ -278,25 +314,60 @@ class SOFollower(Robot):
         if goal_pos:
             self.bus.sync_write("Goal_Position", goal_pos)
 
-        # Incremental control for forearm_roll.
+        # Align forearm_roll in POSITION mode, then track it in STEP mode.
         if forearm_roll_target is not None:
             forearm_roll_target = float(forearm_roll_target)
 
-            # The first frame only establishes the reference.
-            # Do not command a potentially huge movement.
-            if self._last_forearm_roll_target is not None:
+            if not self._forearm_roll_synchronized:
+                present_pos = self.bus.sync_read("Present_Position")
+                follower_angle = float(present_pos["forearm_roll"])
+
+                # Preserve the full reported angle; do not reduce it modulo 360.
+                position_target = forearm_roll_target
+                error_degrees = position_target - follower_angle
+
+                sync_tolerance_degrees = 2.0
+
+                if abs(error_degrees) <= sync_tolerance_degrees:
+
+                    self._switch_forearm_roll_to_step()
+
+                    # Establish the leader baseline so the first STEP command is zero.
+                    self._last_forearm_roll_target = forearm_roll_target
+                    self._forearm_roll_synchronized = True
+
+                    print(
+                        "[forearm_roll position sync] "
+                        "Alignment complete; switched to STEP mode."
+                    )
+                else:
+                    print(
+                        f"[forearm_roll position sync] "
+                        f"commanding absolute target={position_target:.1f}°"
+                    )
+
+                    self.bus.sync_write(
+                        "Goal_Position",
+                        {"forearm_roll": position_target},
+                    )
+
+            else:
+                # Once in STEP mode, copy only the leader's movement since the
+                # preceding control-loop frame.
                 delta_degrees = (
                     forearm_roll_target
                     - self._last_forearm_roll_target
                 )
 
-                # Convert degrees to raw encoder steps:
-                # 4096 raw units = 360 degrees.
                 delta_raw = round(delta_degrees * 4096.0 / 360.0)
 
-                # Prevent one bad reading from causing a large sudden step.
+
+                # Prevent one bad reading from producing a large sudden movement.
                 max_step_raw = 100
-                delta_raw = max(-max_step_raw, min(max_step_raw, delta_raw))
+                delta_raw = max(
+                    -max_step_raw,
+                    min(max_step_raw, delta_raw),
+                )
 
                 if delta_raw != 0:
                     self.bus.sync_write(
@@ -305,7 +376,7 @@ class SOFollower(Robot):
                         normalize=False,
                     )
 
-            self._last_forearm_roll_target = forearm_roll_target
+                self._last_forearm_roll_target = forearm_roll_target
 
         returned_action = {
             f"{motor}.pos": val
